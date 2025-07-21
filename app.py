@@ -12,7 +12,7 @@ if uploaded_file:
     with st.spinner("Processing receipt..."):
         files = {"document": (uploaded_file.name, uploaded_file, uploaded_file.type)}
         headers = {"Authorization": f"Token {st.secrets['MINDEE_API_KEY']}"}
-        response = requests.post("https://api.mindee.net/v1/products/wipeout1/expense_receipt/v5/predict", files=files, headers=headers)
+        response = requests.post("https://api.mindee.net/v1/products/mindee/expense_receipts/v5/predict", files=files, headers=headers)
 
         if response.status_code == 200:
             data = response.json()
