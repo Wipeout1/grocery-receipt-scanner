@@ -34,4 +34,8 @@ if uploaded_file:
             csv = edited_df.to_csv(index=False).encode("utf-8")
             st.download_button("Download CSV", csv, "categorized_receipt.csv", "text/csv")
         else:
-            st.error("Failed to process receipt. Please try again.")
+            st.error("Failed to process receipt. Here's the error detail from Mindee:")
+            try:
+                st.code(response.json(), language="json")
+            except:
+                st.text(response.text)
