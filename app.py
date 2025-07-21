@@ -112,11 +112,23 @@ for file in uploaded_files or []:
 
     raw_items = data.get("document",{}).get("inference",{}).get("pages",[{}])[0].get("prediction",{}).get("line_items",[])
     parsed = parse_receipt(raw_items)
-    ocr_total = data.get("document",{}).get("inference",{}).get("prediction",{}).get("total_amount",{}).get("value",0.0)
+
+    # Safely parse OCR total
+    raw_total = data.get("document",{}).get("inference",{}).get("prediction",{}).get("total_amount",{}).get("value", None)
+    try:
+        ocr_total = float(raw_total)
+    except (TypeError, ValueError):
+        ocr_total = None
+
     subtotal = sum(r["total_amount"] for r in parsed)
-    st.write(f"OCR total: ${ocr_total:.2f} — Parsed subtotal: ${subtotal:.2f}")
-    if abs(subtotal - ocr_total) > 0.01:
-        st.warning("Parsed items do not sum to OCR total!")
+    # Display totals
+    if ocr_total is not None:
+        st.write(f"OCR total: ${ocr_total:.2f} — Parsed subtotal: ${subtotal:.2f}")
+        if abs(subtotal - ocr_total) > 0.01:
+            st.warning("Parsed items do not sum to OCR total!")
+    else:
+        st.write(f"Parsed subtotal: ${subtotal:.2f}")
+        st.info("⚠️ OCR total not found")
 
     grand_total += subtotal
     for r in parsed:
