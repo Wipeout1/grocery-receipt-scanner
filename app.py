@@ -7,79 +7,121 @@ import io
 import re
 from datetime import datetime
 
-# Config
-st.set_page_config(page_title="🧾 Grocery Receipt Scanner – Enhanced Splitting v3", layout="wide")
+# Configure page
+st.set_page_config(page_title="🧾 Grocery Receipt Scanner – Discount Grouping", layout="wide")
 API_URL = "https://api.mindee.net/v1/products/mindee/expense_receipts/v5/predict"
 HEADERS = {"Authorization": f"Token {st.secrets['MINDEE_API_KEY']}"}
 
-st.title("📸 Grocery Receipt Scanner – Enhanced Line Splitting v3")
-st.markdown("Upload receipt images. We'll skip pure discount lines and better split merged items.")
+st.title("📸 Grocery Receipt Scanner – Discount Grouping")
+st.markdown("Upload receipt images. The app will group full-price, quantity, and discount lines into single items.")
 
-uploaded_files = st.file_uploader("Upload receipt images", type=['jpg','jpeg','png'], accept_multiple_files=True)
+# File uploader
+uploaded_files = st.file_uploader(
+    "Upload receipt images",
+    type=["jpg", "jpeg", "png"],
+    accept_multiple_files=True
+)
+
+# Function to call Mindee OCR
+@st.cache_data(show_spinner=False)
+def fetch_receipt_data(image_bytes: bytes) -> dict:
+    response = requests.post(API_URL, files={"document": image_bytes}, headers=HEADERS)
+    response.raise_for_status()
+    return response.json()
+
+# Process each uploaded file
 all_results = []
 grand_total = 0.0
 
 if uploaded_files:
-    for uploaded_file in uploaded_files:
-        st.header(f"Processing: {uploaded_file.name}")
-        # OCR
-        image = Image.open(uploaded_file).convert('RGB')
-        buf = io.BytesIO(); image.save(buf, format='JPEG')
-        resp = requests.post(API_URL, files={'document': buf.getvalue()}, headers=HEADERS)
-        if resp.status_code != 201:
-            st.error(f"API error {resp.status_code}")
-            continue
-        data = resp.json()
+    for file in uploaded_files:
+        st.header(f"Processing: {file.name}")
+        # Read and send to Mindee
+        img = Image.open(file).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        data = fetch_receipt_data(buf.getvalue())
+
         # Date override
-        mindee_date = data.get('document', {}).get('inference', {}).get('prediction', {}).get('date', {}).get('value', '')
+        mindee_date = data.get("document", {}).get("inference", {}).get("prediction", {}).get("date", {}).get("value", "")
         try:
             default_date = datetime.fromisoformat(mindee_date).date() if mindee_date else datetime.today().date()
         except:
             default_date = datetime.today().date()
-        receipt_date = st.date_input(f"Confirm date for {uploaded_file.name}", value=default_date, key=f"date-{uploaded_file.name}")
-        # Extract items
-        items = data.get('document', {}).get('inference', {}).get('pages', [{}])[0].get('prediction', {}).get('line_items', [])
-        total_spent = 0.0
-        for item in items:
-            # Normalize amount, skip negatives
-            amt = item.get('total_amount')
-            if isinstance(amt, str) and amt.endswith('-'):
-                try:
-                    amt = -abs(float(amt.replace('-', '')))
-                except:
-                    amt = 0.0
-            amt = amt or 0.0
-            if amt < 0:
-                continue  # skip pure discount lines
+        receipt_date = st.date_input(
+            f"Confirm date for {file.name}",
+            value=default_date,
+            key=f"date-{file.name}"
+        )
 
-            raw_desc = item.get('description', '').strip()
-            # Remove trailing quantity block
-            desc = re.sub(r"\s+\d+\s*Q.*$", "", raw_desc)
-            # Trim trailing price or discount dash
-            desc = re.sub(r"\s+\d+(?:\.\d+)?-?$", "", desc)
-            # Enhanced splitting
-            words = desc.split()
-            if len(words) > 2 and amt > 0:
-                primary = ' '.join(words[:2])
-                leftover = ' '.join(words[2:])
-                entries = [(primary, amt), (leftover, 0.0)]
-            else:
-                entries = [(desc, amt)]
+        # Extract raw items
+        page = data.get("document", {}).get("inference", {}).get("pages", [{}])[0]
+        raw_items = page.get("prediction", {}).get("line_items", [])
 
-            for d, a in entries:
-                total_spent += a
+        # Group items
+        i = 0
+        receipt_sum = 0.0
+        while i < len(raw_items):
+            item = raw_items[i]
+            desc = item.get("description", "").strip()
+            price_full = item.get("total_amount") or 0.0
+
+            # Check for discount pattern: next two lines
+            if (
+                i + 2 < len(raw_items)
+                and re.match(r"^\d+\s*@\s*[0-9.]+$", raw_items[i+1].get("description", "").strip())
+                and raw_items[i+2].get("description", "").strip().upper().startswith(desc.upper())
+            ):
+                # Parse quantity and discount
+                qty_line = raw_items[i+1].get("description", "").strip()
+                qty = int(qty_line.split("@")[0].strip())
+                discount_amt = abs(raw_items[i+2].get("total_amount") or 0.0)
+                net_total = price_full - discount_amt
+
                 all_results.append({
-                    'source_file': uploaded_file.name,
-                    'receipt_date': receipt_date.isoformat(),
-                    'description': d,
-                    'quantity': item.get('quantity'),
-                    'unit_price': item.get('unit_price'),
-                    'total_amount': round(a, 2)
+                    "source_file": file.name,
+                    "receipt_date": receipt_date.isoformat(),
+                    "description": desc,
+                    "quantity": qty,
+                    "unit_price": price_full,
+                    "total_amount": round(net_total, 2),
+                    "original_discount": discount_amt
                 })
-        st.write(f"Items: {len(all_results)} — Sum = ${total_spent:.2f}")
-        grand_total += total_spent
+                receipt_sum += net_total
+                i += 3
+            else:
+                # Regular item, no discount grouping
+                qty = item.get("quantity") or 1
+                all_results.append({
+                    "source_file": file.name,
+                    "receipt_date": receipt_date.isoformat(),
+                    "description": desc,
+                    "quantity": qty,
+                    "unit_price": item.get("unit_price"),
+                    "total_amount": round(price_full, 2),
+                    "original_discount": None
+                })
+                receipt_sum += price_full
+                i += 1
+
+        # Display receipt total from OCR
+        ocr_total = data.get("document", {}).get("inference", {}).get("prediction", {}).get("total_amount", {}).get("value")
+        if ocr_total:
+            st.write(f"**Receipt total (OCR):** ${ocr_total:.2f}")
+        st.write(f"**Sum of grouped items:** ${receipt_sum:.2f}")
+        if ocr_total and abs(receipt_sum - float(ocr_total)) > 0.01:
+            st.warning("⚠️ Sum of grouped items does not match OCR receipt total.")
+
+        grand_total += receipt_sum
+
+    # Show grand total
     st.sidebar.header("Grand Total")
     st.sidebar.write(f"**${grand_total:.2f}**")
+
+    # Display combined table and CSV download
     df = pd.DataFrame(all_results)
-    st.subheader("All Line Items")
+    st.subheader("All Line Items (Grouped)")
     st.dataframe(df)
+
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download CSV", csv, "grocery_data_grouped.csv", "text/csv")
