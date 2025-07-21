@@ -15,7 +15,7 @@ uploaded_files = st.file_uploader("Upload receipt images", type=["jpg", "jpeg", 
 headers = {
     "Authorization": f"Token {st.secrets['MINDEE_API_KEY']}"
 }
-api_url = "https://api.mindee.net/v1/products/mindee/expense_receipts/v5/predict"
+api_url = "https://api.mindee.net/v1/products/mindee/expense_receipt/v5/predict"
 
 all_results = []
 
